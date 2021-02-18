@@ -625,43 +625,22 @@ eqn
 	removeEmptyParList(c |> par1) = if(#c == 0, removeEmptyParList(par1), c |> removeEmptyParList(par1));
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%SysML specifc data structures
+%Change event derivation
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 sort
-	Component = struct Component(
-		SM: StateMachine,
-		in_ports: List(VarName),
-		out_ports: List(VarName)
-	);
-	CompPortPair = struct CompPortPair(getComp: CompName, getPort: VarName);
-	Channel = struct Channel(sender: CompPortPair, receivers: List(CompPortPair));
 	Monitor = struct Monitor(getMonitorExpression:Instructions,getMonitorValuation:Bool);
-	VarValuePair = struct VarValuePair(getVariable:VarName, getValue:Value);
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%SysML specifc data operations
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 map
-	filterPortUpdates: List(VarValuePair)#Component -> List(VarValuePair);
 	updateMonitors: List(Monitor)#(VarName -> Value) -> List(Monitor);
 	deriveChangeEvents: List(Monitor)#(VarName -> Value) -> List(Event);
 	deriveChangeEventsMultUpdates: List(Monitor)#(VarName -> Value)#List(VarValuePair) -> List(Event);
 var
-	vv,u: VarValuePair;
+	u: VarValuePair;
 	updates: List(VarValuePair);
-	c: Component;
 	monitors, updated: List(Monitor);
 	mon: Monitor;
 	derived_events: List(Event);
 	vars: VarName -> Value;
 eqn
-	%Filter out updates to state machine variables to get updates of ports
-	filterPortUpdates([],c) = [];
-	filterPortUpdates(vv |> updates, c) =
-		if(getVariable(vv) in out_ports(c),
-			[vv],
-			[])
-		++ filterPortUpdates(updates, c);
 	updateMonitors(mon |> monitors,vars) = Monitor(getMonitorExpression(mon),
 		checkGuard(getMonitorExpression(mon),vars)) |> updateMonitors(monitors,vars);
 	updateMonitors([],vars) = [];
@@ -679,6 +658,33 @@ eqn
 			vars[getVariable(u) -> getValue(u)],
 			updates
 		);
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%SysML specifc data structures
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+sort
+	Component = struct Component(
+		SM: StateMachine,
+		in_ports: List(VarName),
+		out_ports: List(VarName)
+	);
+	CompPortPair = struct CompPortPair(getComp: CompName, getPort: VarName);
+	Channel = struct Channel(sender: CompPortPair, receivers: List(CompPortPair));
+	VarValuePair = struct VarValuePair(getVariable:VarName, getValue:Value);
+map
+	filterPortUpdates: List(VarValuePair)#Component -> List(VarValuePair);
+var
+	vv: VarValuePair;
+	updates: List(VarValuePair);
+	c: Component;
+eqn
+	%Filter out updates to state machine variables to get updates of ports
+	filterPortUpdates([],c) = [];
+	filterPortUpdates(vv |> updates, c) =
+		if(getVariable(vv) in out_ports(c),
+			[vv],
+			[])
+		++ filterPortUpdates(updates, c);
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %State machine process definitions
