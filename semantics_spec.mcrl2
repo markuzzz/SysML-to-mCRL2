@@ -7,8 +7,7 @@ sort
 		initialState: StateName,
 		states: List(StateName),
 		stateInfo: StateName -> StateInfo,
-		initialValuation: VarName -> Value,
-		initialMonitors: List(Monitor)
+		initialValuation: VarName -> Value
 	);
 	StateInfo = struct SimpleState(parent: StateName, entryAction: Instructions, exitAction: Instructions) ?is_simple
 		| CompositeState(parent: StateName, entryAction: Instructions, exitAction: Instructions) ?is_composite
@@ -81,7 +80,7 @@ eqn
 	maxDepthList(sc |> sc_list) = max(maxDepth(sc),maxDepthList(sc_list));
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%Transformation from Steps to steps
+%Transformation from transitions to steps
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 sort
 	Step = struct Step(
@@ -340,7 +339,7 @@ eqn
 	filterStepsEnabled([],e,vars) = [];
 	filterStepsEnabled(tr |> trs,e,vars) =
 		%to check the guard we create a function frame and execute it after which we inspect the frame stack for the result
-		if(trigger(tr) == e && forall g:Instructions. g in guard(tr) => checkGuard(g,vars),[tr],[])
+		if(trigger(tr) == e && forall g:Instructions. g in guard(tr) => checkPredicate(g,vars),[tr],[])
 		++ filterStepsEnabled(trs,e,vars);
 
 	%Steps stemming from states deeper in the hierarchy have priority.
@@ -633,6 +632,8 @@ map
 	updateMonitors: List(Monitor)#(VarName -> Value) -> List(Monitor);
 	deriveChangeEvents: List(Monitor)#(VarName -> Value) -> List(Event);
 	deriveChangeEventsMultUpdates: List(Monitor)#(VarName -> Value)#List(VarValuePair) -> List(Event);
+	deriveMonitorsSM: StateMachine -> List(Monitor);
+	deriveMonitors: List(Transition)#List(Monitor) -> List(Monitor);
 var
 	u: VarValuePair;
 	updates: List(VarValuePair);
@@ -640,12 +641,15 @@ var
 	mon: Monitor;
 	derived_events: List(Event);
 	vars: VarName -> Value;
+	sm: StateMachine;
+	tr: Transition;
+	trs: List(Transition);
 eqn
 	updateMonitors(mon |> monitors,vars) = Monitor(getMonitorExpression(mon),
-		checkGuard(getMonitorExpression(mon),vars)) |> updateMonitors(monitors,vars);
+		checkPredicate(getMonitorExpression(mon),vars)) |> updateMonitors(monitors,vars);
 	updateMonitors([],vars) = [];
 	deriveChangeEvents(mon |> monitors,vars) =
-		if(checkGuard(getMonitorExpression(mon),vars) && !getMonitorValuation(mon),
+		if(checkPredicate(getMonitorExpression(mon),vars) && !getMonitorValuation(mon),
 			[ChangeEvent(getMonitorExpression(mon))],
 			[]
 		) ++ deriveChangeEvents(monitors,vars);
@@ -658,6 +662,11 @@ eqn
 			vars[getVariable(u) -> getValue(u)],
 			updates
 		);
+	deriveMonitorsSM(sm) = deriveMonitors(transitions(sm),[]);
+	deriveMonitors([], monitors) = monitors;
+	deriveMonitors(tr |> trs, monitors) = if(is_change_event(trigger(tr)) && !(Monitor(get_expression(trigger(tr)),false) in monitors),
+		deriveMonitors(trs, monitors <| Monitor(get_expression(trigger(tr)),false)),
+		deriveMonitors(trs,monitors));
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %SysML specifc data structures
@@ -704,7 +713,7 @@ proc
 		Steps(SM(comp)),
 		StateConfig(initialState(SM(comp)),[]),
 		[],
-		initialMonitors(SM(comp)),
+		updateMonitors(deriveMonitorsSM(SM(comp)),initialValuation(SM(comp))),
 		initialValuation(SM(comp)),
 		{},
 		[],
@@ -784,7 +793,7 @@ proc
 			%If the function frame has not finished execution we store the function frame in the variable ongoing_execution
 			ongoing_execution = if(isFinished(executeExcFrameCode(ongoing_execution)),
 				EmptyExcFrame,
-				executeExcFrameCode(ongoing_execution)),
+				resetVariableUpdates(executeExcFrameCode(ongoing_execution))),
 			%Derive change events from updated variables
 			event_queue = event_queue ++ deriveChangeEventsMultUpdates(monitors,vars,getVariableUpdates(executeExcFrameCode(ongoing_execution))),
 			%Update monitors
@@ -859,7 +868,7 @@ sort
 map
 	initializeExcFrame: Instructions#(VarName -> Value) -> ExcFrame;
 	executeExcFrameCode: ExcFrame -> ExcFrame;
-	checkGuard: Instructions#(VarName -> Value) -> Bool;
+	checkPredicate: Instructions#(VarName -> Value) -> Bool;
 	isFinished: ExcFrame -> Bool;
 	getValuation: ExcFrame -> VarName -> Value;
 	getVariableUpdates: ExcFrame -> List(VarValuePair);
@@ -876,8 +885,8 @@ eqn
 	initializeExcFrame(instr,v) = ExcFrame(instr,v,[]);
 	executeExcFrameCode(ExcFrame(Update(variable,value) |> instr, v, upd)) = ExcFrame(instr, v[variable -> value], upd <| VarValuePair(variable,value));
 	executeExcFrameCode(ExcFrame(Equals(variable,value) |> instr, v, upd)) = ExcFrame(instr, v, upd);
-	checkGuard(Equals(variable,value) |> instr,v) = v(variable) == value;
-	checkGuard([],v) = true;
+	checkPredicate(Equals(variable,value) |> instr,v) = v(variable) == value;
+	checkPredicate([],v) = true;
 	isFinished(e) = #Code(e) == 0;
 	getValuation(e) = Val(e);
 	getVariableUpdates(e) = Updates(e);
@@ -901,8 +910,7 @@ eqn
 		initial,
 		[initial,busy],
 		stateInfoInst,
-		initValuation,
-		[]);
+		initValuation);
 	CompInstantiation = Component(SMInstantiation, [input], [output]);
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
