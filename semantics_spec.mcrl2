@@ -1,4 +1,29 @@
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%											TABLE OF CONTENTS
+% State machine data operations
+%	Data structures state machines
+%	Basic operations on state configurations
+%	Transformation transitions to steps
+%	Transition selection
+%	Next state computation
+%	Behaviour selection
+%	Behaviour execution options
+%	Change event derivation
+%	EULYNX SysML port connections
+% Process definitions
+%	State machine process
+%	Environment process (SysML)
+%	Messaging process (SysML)
+% Configuration
+%	Action language semantics
+%	Enumerations
+%	Process expression
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Structure of state machines
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 sort
@@ -207,7 +232,7 @@ eqn
 				[ParBehaviors(combineEffectsList(incoming))],
 				target(head(incoming)),
 				false,
-				root))
+				s))
 			<| updateGuard(head(outgoing),[])
 			whr incoming = getIncomingSteps(tlist,s), outgoing = getOutgoingSteps(tlist,s) end;
 	removeForks([],tlist) = tlist;
@@ -220,7 +245,7 @@ eqn
 				[ParBehaviors(combineEffectsList(outgoing))],
 				combineStateConfigs(getTargetConfigs(outgoing)),
 				false,
-				root))
+				multiple))
 			<| updateGuard(head(incoming),combineGuards(incoming ++ outgoing))
 			whr incoming = getIncomingSteps(tlist,s), outgoing = getOutgoingSteps(tlist,s) end;
 	updateGuard(t,g) = Step(
@@ -244,7 +269,7 @@ eqn
 		|> processInitialStatesSteps(sm,tlist);
 	addFinalStatesSteps(sm,[]) = [];
 	addFinalStatesSteps(sm,t |> tlist) =
-		if(trigger(t) == none,
+		if(trigger(t) != none,
 			[t],
 			[Step(
 				if(trigger(t) == none,
@@ -396,7 +421,8 @@ var
 	ordering: List(StateName);
 	exited: Set(StateName);
 eqn
-	computeNextState(cur,tr) = computeNextState(
+	internal(tr) -> computeNextState(cur,tr) = cur;
+	(!internal(tr)) -> computeNextState(cur,tr) = computeNextState(
 		cur,
 		source(tr),
 		target(tr),
@@ -726,107 +752,100 @@ proc
 	StateMachine(
 			ID:CompName,
 			comp:Component,
-			steps: List(Step),
-			current_state_config:StateConfig, %SM is 'in' a hierarchy of states, possibly containg parallel regions
-			event_queue: List(Event), %Events, stemming from for example 'when' statements are stored here until dispatch
-			monitors:List(Monitor), %For each expression inside a 'when' statement a monitor is needed to check when the valuation goes from false to true
+			all_steps: List(Step),
+			sc:StateConfig, %SM is 'in' a hierarchy of states, possibly containg parallel regions
+			eq: List(Event), %Events, stemming from for example 'when' statements are stored here until dispatch
+			mon:List(Monitor), %For each expression inside a 'when' statement a monitor is needed to check when the valuation goes from false to true
 			vars: VarName -> Value, %Current value of variables, which are both proper variables as well as ports
-			steps_to_execute: Set(Step), %In the case of parallel regions a multi-step of multiple Steps may be selected, which are stored in this variable
-			behavior_to_execute: ComposedBehavior, %Stores behaviour to be executed for ongoing Step, may contain parallel behaviours
-			ongoing_execution:ExcFrame, %Function frame of instructions that are being executed, stores a paused execution
-			message_output_queue: List(VarValuePair) %When during the execution of a function frame multiple ports are updates, the updates are temporarily stored here
+			steps: Set(Step), %In the case of parallel regions a multi-step of multiple Steps may be selected, which are stored in this variable
+			behav: ComposedBehavior, %Stores behaviour to be executed for ongoing Step, may contain parallel behaviours
+			exc:ExcFrame, %Function frame of instructions that are being executed, stores a paused execution
+			oq: List(VarValuePair) %When during the execution of a function frame multiple ports are updates, the updates are temporarily stored here
 			) =
 		%Receive messages on ports from other components, message queue is bound to prohibit infinite state space
-		(#event_queue < 1) -> sum v:Value,p:VarName. receiveComp(CompPortPair(ID,p),v).StateMachine(
+		(#eq < 1) -> sum v:Value,p:VarName. receiveComp(CompPortPair(ID,p),v).StateMachine(
 			vars = vars[p -> v], %Update mapping
-			event_queue = event_queue ++ deriveChangeEvents(monitors, vars[p->v]), %Derive events from changed variable
-			monitors = updateMonitors(monitors,vars[p -> v])) %Update monitors
+			eq = eq ++ deriveChangeEvents(mon, vars[p->v]), %Derive events from changed variable
+			mon = updateMonitors(mon,vars[p -> v])) %Update monitors
 		%if no Step is enabled by an event then it can be discarded
-		+ (steps_to_execute == {} && #behavior_to_execute == 0 && ongoing_execution == EmptyExcFrame
-			&& #event_queue != 0 && !containsPseudoState(current_state_config,SM(comp))
-			&& #message_output_queue == 0
-			&& #filterStepsEnabled(filterStepsPossible(steps,current_state_config,SM(comp)),head(event_queue),vars) == 0)
-				-> discardEvent(head(event_queue)).StateMachine(event_queue = tail(event_queue))
+		+ (steps == {} && #behav == 0 && exc == EmptyExcFrame
+			&& #eq != 0 && !containsPseudoState(sc,SM(comp))
+			&& #oq == 0
+			&& #filterStepsEnabled(filterStepsPossible(all_steps,sc,SM(comp)),head(eq),vars) == 0)
+				-> discardEvent(head(eq)).StateMachine(eq = tail(eq))
 		%select Step(s) to start executing
-		+ (steps_to_execute == {} && #behavior_to_execute == 0 && #message_output_queue == 0 && ongoing_execution == EmptyExcFrame) ->
+		+ (steps == {} && #behav == 0 && #oq == 0 && exc == EmptyExcFrame) ->
 		 	(
-				StateMachineSelectStep(ID, comp, steps, current_state_config,event_queue, monitors, vars, none) %Event none, some Steps do not need a specific event
-				+ StateMachineSelectStep(ID, comp, steps, current_state_config,event_queue, monitors, vars, TimeoutEvent) %TimeoutEvent
-				+ (#event_queue > 0) -> StateMachineSelectStep(ID, comp, steps, current_state_config,event_queue, monitors, vars, head(event_queue)) %Event from event queue
+				StateMachineSelectStep(ID, comp, all_steps, sc,eq, mon, vars, none) %Event none, some Steps do not need a specific event
+				+ StateMachineSelectStep(ID, comp, all_steps, sc,eq, mon, vars, TimeoutEvent) %TimeoutEvent
+				+ (#eq > 0) -> StateMachineSelectStep(ID, comp, all_steps, sc,eq, mon, vars, head(eq)) %Event from event queue
 			)
 		%From set of selected Steps pick one to start executing
-		+ (#behavior_to_execute == 0 && #message_output_queue == 0 && ongoing_execution == EmptyExcFrame) ->
-		 	sum next_step:Step. (next_step in steps_to_execute)
+		+ (#behav == 0 && #oq == 0 && exc == EmptyExcFrame) ->
+		 	sum next_step:Step. (next_step in steps)
 		 	-> executeStep(next_step).StateMachine(
-		 		steps_to_execute = steps_to_execute - {next_step},
-		 		behavior_to_execute = determineBehaviourStep(SM(comp),next_step,current_state_config),
-		 		current_state_config = computeNextState(current_state_config,next_step)
+		 		steps = steps - {next_step},
+		 		behav = determineBehaviourStep(SM(comp),next_step,sc),
+		 		sc = computeNextState(sc,next_step)
 		 	)
 		%From behavior that needs to be executed pick an execution option and start executing.
 		%Note that for sequential behavior there is only one execution option but a Step may have some parallel behavior
-		+ (#behavior_to_execute != 0 && ongoing_execution == EmptyExcFrame && #message_output_queue == 0)
+		+ (#behav != 0 && exc == EmptyExcFrame && #oq == 0)
  		 	-> sum execution_option:ExecutionOption.
-			(execution_option in computeExecutionOptions(behavior_to_execute) && #getCodeToExecute(execution_option) > 0) ->
+			(execution_option in computeExecutionOptions(behav) && #getCodeToExecute(execution_option) > 0) ->
  		 		StateMachineExecuteCode(
-					ongoing_execution = initializeExcFrame(getCodeToExecute(execution_option),vars),
-					behavior_to_execute = getRemainingBehavior(execution_option))
-		+ (ongoing_execution != EmptyExcFrame && #message_output_queue == 0) -> StateMachineExecuteCode()
+					exc = initializeExcFrame(getCodeToExecute(execution_option),vars),
+					behav = getRemainingBehavior(execution_option))
+		+ (exc != EmptyExcFrame && #oq == 0) -> StateMachineExecuteCode()
 		%If there are messages waiting to be sent to other components, do that
-		+ (#message_output_queue > 0) ->
- 		 	sendComp(CompPortPair(ID, getVariable(head(message_output_queue))),getValue(head(message_output_queue)))
- 		 	.StateMachine(message_output_queue = tail(message_output_queue));
+		+ (#oq > 0) ->
+ 		 	sendComp(CompPortPair(ID, getVariable(head(oq))),getValue(head(oq)))
+ 		 	.StateMachine(oq = tail(oq));
 
-	%Executes code in ongoing_execution
+	%Executes code in exc
  	StateMachineExecuteCode(ID:CompName, comp:Component,
-			steps: List(Step), current_state_config:StateConfig,event_queue: List(Event), monitors:List(Monitor),
- 			vars: VarName -> Value, steps_to_execute: Set(Step), behavior_to_execute: ComposedBehavior,
- 			ongoing_execution:ExcFrame, message_output_queue: List(VarValuePair)) =
+			all_steps: List(Step), sc:StateConfig,eq: List(Event), mon:List(Monitor),
+ 			vars: VarName -> Value, steps: Set(Step), behav: ComposedBehavior,
+ 			exc:ExcFrame, oq: List(VarValuePair)) =
 		%if at least one port update send a message to other state machine
- 		((#filterPortUpdates(getVariableUpdates(executeExcFrameCode(ongoing_execution)),comp) > 0) ->
- 		 			sendComp(CompPortPair(ID,
- 						getVariable(head(filterPortUpdates(getVariableUpdates(executeExcFrameCode(ongoing_execution)),comp)))),
- 						getValue(head(filterPortUpdates(getVariableUpdates(executeExcFrameCode(ongoing_execution)),comp))))
- 		 			<> executeBehaviour %if no message is sent on a port simply perform a dummy action
-		).StateMachine(
+ 		executeBehaviour.StateMachine(
 			%Update mapping of global variables
-			vars = getValuation(executeExcFrameCode(ongoing_execution)),
-			%If the function frame has not finished execution we store the function frame in the variable ongoing_execution
-			ongoing_execution = if(isFinished(executeExcFrameCode(ongoing_execution)),
+			vars = getValuation(executeExcFrameCode(exc)),
+			%If the function frame has not finished execution we store the function frame in the variable exc
+			exc = if(isFinished(executeExcFrameCode(exc)),
 				EmptyExcFrame,
-				resetVariableUpdates(executeExcFrameCode(ongoing_execution))),
+				resetVariableUpdates(executeExcFrameCode(exc))),
 			%Derive change events from updated variables
-			event_queue = event_queue ++ deriveChangeEventsMultUpdates(monitors,vars,getVariableUpdates(executeExcFrameCode(ongoing_execution))),
+			eq = eq ++ deriveChangeEventsMultUpdates(mon,vars,getVariableUpdates(executeExcFrameCode(exc))),
 			%Update monitors
-			monitors = updateMonitors(monitors,getValuation(executeExcFrameCode(ongoing_execution))),
-			%If there was more than one message to send via a port store the remainder in message_output_queue
-			message_output_queue = if(#filterPortUpdates(getVariableUpdates(executeExcFrameCode(ongoing_execution)),comp) > 1,
-			tail(filterPortUpdates(getVariableUpdates(executeExcFrameCode(ongoing_execution)),comp)),
-			[]));
+			mon = updateMonitors(mon,getValuation(executeExcFrameCode(exc))),
+			%If there was more than one message to send via a port store the remainder in oq
+			oq = filterPortUpdates(getVariableUpdates(executeExcFrameCode(exc)),comp));
 
 	%Selects Step based on event 'ev'
 	StateMachineSelectStep(ID:CompName, comp:Component,
-			steps: List(Step),current_state_config:StateConfig,event_queue: List(Event),
-			monitors:List(Monitor), vars: VarName -> Value, ev:Event) =
+			all_steps: List(Step),sc:StateConfig,eq: List(Event),
+			mon:List(Monitor), vars: VarName -> Value, ev:Event) =
 		sum multi:List(Step). %step may consist of multiple Steps
 	 		(
 	 			multi in stepPossibilities(
 					filterStepsPriority(
 						filterStepsEnabled(
 							filterStepsPossible(
-								steps,
-								current_state_config,
+								all_steps,
+								sc,
 								SM(comp)),
 							ev,vars)))
 	 		)
 			%If the step contains only 1 Step we immediately start executing it by computing the next state and the behavior that needs to be executed
 	 		-> selectMultiStep(ev,multi).StateMachine(
-					ID, comp, steps,
-					if(#multi == 1, computeNextState(current_state_config,head(multi)), current_state_config),
-					if(#event_queue > 0 && ev == head(event_queue),tail(event_queue),event_queue), %if head of event queue was used as trigger remove it from the queue
-					monitors,
+					ID, comp, all_steps,
+					sc,
+					if(#eq > 0 && ev == head(eq),tail(eq),eq), %if head of event queue was used as trigger remove it from the queue
+					mon,
 					vars,
-					if(#multi == 1, {}, {t:Step | t in multi}),
-	 				if(#multi == 1, determineBehaviourStep(SM(comp),head(multi),current_state_config), []),
+					{t:Step | t in multi},
+	 				[],
 	 				EmptyExcFrame,
 					[]
 	 		);
@@ -848,15 +867,18 @@ proc
 %Enumerations to be initialized for configuration
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 sort
- 	VarName = struct input | output;
- 	StateName = struct root | initial | busy;
+ 	VarName = struct m | reactor_ready | controller_state | broken | A;
+ 	StateName = struct root | multiple | Initial1 | Starting_Controller | Starting_Reactor | Booted 
+		| Timeout | Initial2 | Initial3 | fork1 | join0 | Checked | Failed | Initial4 | c1 | final1 
+		| Booting | j1 | Checking;
  	CompName = struct Environment | C1 | C2;
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Action language semantics to be initialized for configuration
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 sort
-	Value = struct Value_Int(int_value:Int) | Value_Bool(b:Bool);
+	Value = struct Value_Int(int_value:Int) | Value_Bool(b:Bool) | Value_String(str: String);
+	String = struct STR_ | STR_error | STR_booted | STR_retry;
 	Instruction = struct Update(Var:VarName, Val:Value) | Equals(Var:VarName, Val:Value);
 	Instructions = List(Instruction);
 	ExcFrame = struct EmptyExcFrame | ExcFrame(
@@ -893,25 +915,64 @@ eqn
 	resetVariableUpdates(ExcFrame(instr,v,upd)) = ExcFrame(instr,v,[]);
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%Minimal example state machine configuration
+%Example configuration
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 map
-	SMInstantiation: StateMachine;
-	stateInfoInst: StateName -> StateInfo;
-	initValuation: VarName -> Value;
-	CompInstantiation: Component;
+	SMInstantiationComp1: StateMachine;
+	stateInfoInstComp1: StateName -> StateInfo;
+	initValuationComp1: VarName -> Value;
+	CompInstantiationComp1: Component;
 eqn
-	stateInfoInst(initial) = InitialState(root);
-	stateInfoInst(busy) = SimpleState(root,[],[]);
-	initValuation(input) = Value_Int(1);
-	initValuation(output) = Value_Int(1);
-	SMInstantiation = StateMachine(
-		[Transition(initial,none,[],[Update(output,Value_Int(2))],busy,false)],
-		initial,
-		[initial,busy],
-		stateInfoInst,
-		initValuation);
-	CompInstantiation = Component(SMInstantiation, [input], [output]);
+	stateInfoInstComp1(Initial1) = InitialState(root);
+	stateInfoInstComp1(fork1) = ForkVertex(root);
+	stateInfoInstComp1(Booting) = CompositeState(root,[],[]);
+	stateInfoInstComp1(Starting_Controller) = SimpleState(Booting,[],[]);
+	stateInfoInstComp1(Starting_Reactor) = SimpleState(Booting,[],[]);
+	stateInfoInstComp1(Booted) = SimpleState(root,[Update(m,Value_String(STR_booted))],[Update(A,Value_Int(10))]);
+	stateInfoInstComp1(Timeout) = SimpleState(root,[],[]);
+	stateInfoInstComp1(join0) = JoinVertex(root);
+	stateInfoInstComp1(Initial2) = InitialState(Booting);
+	stateInfoInstComp1(Initial3) = InitialState(Booting);
+	stateInfoInstComp1(Initial4) = InitialState(Failed);
+	stateInfoInstComp1(Failed) = CompositeState(root,[],[]);
+	stateInfoInstComp1(Checking) = SimpleState(Failed,[],[]);
+	stateInfoInstComp1(c1) = ChoiceVertex(Failed);
+	stateInfoInstComp1(final1) = FinalState(Failed);
+	stateInfoInstComp1(j1) = JunctionVertex(root);
+
+	initValuationComp1(controller_state) = Value_String(STR_booted);
+	initValuationComp1(broken) = Value_Bool(true);
+	initValuationComp1(reactor_ready) = Value_Bool(true);
+	initValuationComp1(A) = Value_Int(0);
+	initValuationComp1(m) = Value_String(STR_);
+	SMInstantiationComp1 = StateMachine(
+		[
+			Transition(Initial1,none,[],[],fork1,false),
+			Transition(fork1,none,[],[],Starting_Controller,false),
+			Transition(fork1,none,[],[],Starting_Reactor,false),
+			Transition(Initial2,none,[],[],Starting_Controller,false),
+			Transition(Initial3,none,[],[],Starting_Reactor,false),
+			Transition(Starting_Controller,none,[Equals(controller_state,Value_String(STR_booted))],[],join0,false),
+			Transition(Starting_Reactor,none,[Equals(controller_state,Value_Bool(true))],[],join0,false),
+			Transition(join0,none,[],[],Booted,false),
+			Transition(Booting,TimeoutEvent,[],[],Timeout,false),
+			Transition(Timeout,none,[],[],Booting,false),
+			Transition(Starting_Controller,none,[],[Update(m,Value_String(STR_error))],Failed,false),
+			Transition(Failed,TimeoutEvent,[],[Update(m,Value_String(STR_error))],Failed,true),
+			Transition(Initial4,none,[],[],Checking,false),
+			Transition(Checking,none,[],[Update(A,Value_Int(1))],c1,false),
+			Transition(c1,none,[Equals(broken,Value_Bool(true))],[],final1,false),
+			Transition(c1,none,[Equals(broken,Value_Bool(false))],[],j1,false),
+			Transition(Failed,none,[],[],j1,false),
+			Transition(j1,none,[],[Update(m,Value_String(STR_retry))],Booting,false)
+		],
+		Initial1,
+		[Initial1,fork1,Initial2,Initial3,Initial4,Booting,Failed,c1,j1,join0,
+			Starting_Controller,Starting_Reactor,Booted,Checking,Timeout,
+			final1],
+		stateInfoInstComp1,
+		initValuationComp1);
+	CompInstantiationComp1 = Component(SMInstantiationComp1, [], [m]);
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %Initial process expression to be initialized for configuration
@@ -924,6 +985,7 @@ init
 			sendComp|receiveI -> send,
 			sendI|receiveComp -> receive
 		},
-			MessagingIntermediary([Channel(CompPortPair(C1,output),[CompPortPair(C2,input)]),Channel(CompPortPair(C2,output),[CompPortPair(C1,input)])])||Environment([],[])
-			|| StateMachineInit(C1,CompInstantiation) || StateMachineInit(C2,CompInstantiation)
+			MessagingIntermediary([Channel(CompPortPair(C1,m),[CompPortPair(Environment,m)])])
+			|| Environment([],[CompPortPair(C1,m)])
+			|| StateMachineInit(C1,CompInstantiationComp1)
 	));
